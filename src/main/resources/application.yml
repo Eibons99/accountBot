@@ -1,0 +1,73 @@
+spring:
+  datasource:
+    url: jdbc:mysql://${my.server}:13306/accounting?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: Kx9mP2vL7nQ4wRbZ
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  
+  # Redis 配置
+  redis:
+    host: ${my.server}
+    port: 63179
+    password: Rx5mK8vN2pL6wQjT
+    database: 7
+    timeout: 10000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+  
+  # MyBatis-Plus 配置
+  main:
+    allow-bean-definition-overriding: true
+  
+my:
+  server: 127.0.0.1
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  mapper-locations: classpath*:/mapper/**/*.xml
+
+bot:
+  username: 超级记账机器人
+  token: 8629295100:AAGm7k6BWbP7N1TcshL9NfMC7R5Qm3CdBUI
+  
+  # 运行模式：longpolling 或 webhook
+  mode: longpolling
+  
+  # Webhook 配置（当 mode=webhook 时生效）
+  # webhook-url: https://your-domain.com
+  # webhook-path: /webhook
+  # server-port: 8443
+  
+  # 服务器 URL（用于在线表格功能）
+  server-url: http://localhost:8080
+  
+  exchange-rate: 1
+  fee-rate: 0
+  day-cutoff-time: 00:00
+
+logging:
+  level:
+    com.bot.accounting: INFO
+    org.telegram: WARN
+    io.minio: DEBUG  # MinIO SDK 日志
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# MinIO 文件存储配置
+minio:
+  endpoint: http://localhost:9000        # MinIO 服务器地址
+  access-key: minioadmin                 # 访问密钥
+  secret-key: minioadmin                 # 秘密密钥
+  bucket: accounting-bot-exports         # 存储桶名称
+  secure: false                          # 是否使用 HTTPS

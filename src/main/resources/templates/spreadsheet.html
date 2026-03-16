@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>账单明细 - [[${startDate}]]</title>
+    
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css">
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .filter-section {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .filter-group label {
+            font-weight: 600;
+            color: #555;
+            white-space: nowrap;
+        }
+        
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 120px;
+            cursor: pointer;
+        }
+        
+        .filter-select:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+        }
+        
+        .search-input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 200px;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+        }
+        
+        h1 {
+            color: #333;
+            margin: 0;
+        }
+        
+        .date-range {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .download-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        .download-btn:hover {
+            background-color: #45a049;
+        }
+        
+        table.dataTable {
+            width: 100% !important;
+            border-collapse: collapse;
+        }
+        
+        table.dataTable thead th {
+            background-color: #f8f9fa;
+            padding: 12px;
+            border-bottom: 2px solid #dee2e6;
+            font-weight: 600;
+        }
+        
+        table.dataTable tbody td {
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .type-income {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .type-expense {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .amount-positive {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .amount-negative {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .summary-row {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>📊 账单明细</h1>
+                <p class="date-range">日期范围：[[${startDate}]] 至 [[${endDate}]]</p>
+            </div>
+            <a th:href="@{/spreadsheet/{chatId}/{date}/download(chatId=${chatId}, date=${startDate}, startDate=${startDate}, endDate=${endDate})}" 
+               class="download-btn">
+                📥 下载 Excel
+            </a>
+        </div>
+        
+        <!-- 筛选区域 -->
+        <div class="filter-section">
+            <div class="filter-group">
+                <label for="filterType">🔍 筛选类型:</label>
+                <select id="filterType" class="filter-select">
+                    <option value="tagger">按标记人</option>
+                    <option value="operator">按操作人</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="keywordSearch">📝 关键字:</label>
+                <input type="text" id="keywordSearch" class="search-input" placeholder="输入姓名或备注...">
+            </div>
+        </div>
+        
+        <table id="transactionsTable" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>金额</th>
+                    <th>标记员</th>
+                    <th>操作员</th>
+                    <th>备注</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 数据将通过 JavaScript 加载 -->
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="5" style="text-align:center; padding: 10px;">
+                        <span id="recordCount">加载中...</span>
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <!-- DataTables JS -->
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <!-- DataTables Buttons -->
+    <script src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.html5.min.js"></script>
+    
+    <script th:inline="javascript">
+        var allTransactions = [];  // 存储所有原始数据
+        var table = null;  // DataTable 实例
+        
+        $(document).ready(function() {
+            // 获取 JSON 数据
+            allTransactions = /*[[${jsonData}]]*/ [];
+            
+            console.log('加载数据:', allTransactions);
+            
+            // 初始化 DataTable
+            table = $('#transactionsTable').DataTable({
+                data: mapDataToRows(allTransactions),
+                language: {
+                    url: '//cdn.datatables.net/plug-ins/1.13.7/i18n/zh-CN.json',
+                    info: '显示 _START_ 到 _END_ 条，共 _TOTAL_ 条记录',
+                    infoEmpty: '没有记录',
+                    infoFiltered: '(从 _MAX_ 条记录中筛选)',
+                    zeroRecords: '没有找到匹配的记录'
+                },
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "全部"]],
+                dom: 'Bfrtip',
+                buttons: [
+                    {
+                        extend: 'excelHtml5',
+                        text: '📥 导出 Excel',
+                        className: 'download-btn',
+                        filename: function() {
+                            return '账单_' + new Date().toISOString().slice(0,10);
+                        }
+                    }
+                ],
+                order: [[0, 'desc'], [1, 'desc']],
+                columnDefs: [
+                    { type: 'date', targets: 0 },
+                    { type: 'time', targets: 1 }
+                ]
+            });
+            
+            // 添加汇总行
+            addSummaryRow(table);
+            updateRecordCount();
+            
+            // 绑定筛选事件
+            $('#filterType, #keywordSearch').on('change keyup', applyFilters);
+        });
+        
+        /**
+         * 应用筛选条件
+         */
+        function applyFilters() {
+            const filterType = $('#filterType').val();  // 'tagger' 或 'operator'
+            const keyword = $('#keywordSearch').val().trim().toLowerCase();
+            
+            console.log('筛选条件 - 类型:', filterType, '关键字:', keyword);
+            
+            // 过滤数据
+            const filteredData = allTransactions.filter(t => {
+                // 如果没有关键字，显示所有
+                if (!keyword) {
+                    return true;
+                }
+                
+                // 根据筛选类型匹配
+                if (filterType === 'tagger') {
+                    // 按标记人筛选
+                    return t.tagger && t.tagger.toLowerCase().includes(keyword);
+                } else if (filterType === 'operator') {
+                    // 按操作人筛选
+                    return t.operator && t.operator.toLowerCase().includes(keyword);
+                }
+                
+                return true;
+            });
+            
+            // 更新表格数据
+            table.clear();
+            table.rows.add(mapDataToRows(filteredData));
+            table.draw();
+            
+            // 更新汇总行和记录数
+            addSummaryRow(table);
+            updateRecordCount(filteredData.length, allTransactions.length);
+        }
+        
+        /**
+         * 转换数据为表格行
+         */
+        function mapDataToRows(transactions) {
+            return transactions.map(function(t) {
+                return [
+                    // 时间（包含日期和时间）
+                    t.date + ' ' + t.time,
+                    // 金额（带颜色）
+                    '<span class="' + (parseFloat(t.amount) >= 0 ? 'amount-positive' : 'amount-negative') + '">' + 
+                        formatAmount(t.amount) + '</span>',
+                    // 标记员
+                    t.tagger || '-',
+                    // 操作员
+                    t.operator || '-',
+                    // 备注
+                    t.description || '-'
+                ];
+            });
+        }
+        
+        /**
+         * 更新记录数显示
+         */
+        function updateRecordCount(filtered, total) {
+            const count = filtered !== undefined ? filtered : allTransactions.length;
+            const totalCount = total !== undefined ? total : allTransactions.length;
+            $('#recordCount').text(`共 ${totalCount} 条记录` + (filtered !== undefined && filtered < totalCount ? `（当前显示 ${count} 条）` : ''));
+        }
+        
+        /**
+         * HTML 转义
+         */
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.toString()
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+        
+        function formatAmount(amount) {
+            var num = parseFloat(amount);
+            if (isNaN(num)) return amount;
+            return '¥' + Math.abs(num).toLocaleString('zh-CN', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+        
+        function addSummaryRow(table) {
+            var totalIncome = 0;
+            var totalExpense = 0;
+            
+            table.data().each(function(row) {
+                var amount = parseFloat(row[3].replace(/[¥,]/g, ''));
+                if (amount >= 0) {
+                    totalIncome += amount;
+                } else {
+                    totalExpense += Math.abs(amount);
+                }
+            });
+            
+            var footerHtml = `
+                <tr class="summary-row">
+                    <td colspan="3" style="text-align:right;">汇总:</td>
+                    <td class="amount-positive">入款：¥${totalIncome.toFixed(2)}</td>
+                    <td colspan="4" class="amount-negative">下发：¥${totalExpense.toFixed(2)}</td>
+                </tr>
+            `;
+            
+            $(table.table().footer()).html(footerHtml);
+        }
+    </script>
+</body>
+</html>
