@@ -15,6 +15,9 @@ public class MessageParser {
     // 匹配金额的正则表达式 - 支持 +金额 或 金额
     private static final Pattern AMOUNT_PATTERN = Pattern.compile("\\+?(\\d+(?:\\.\\d{1,2})?)");
     
+    // 严格匹配记账格式：金额 备注（金额在前，空格分隔）
+    private static final Pattern STRICT_BOOKING_PATTERN = Pattern.compile("^\\+?(\\d+(?:\\.\\d{1,2})?)(\\s+.*)?$");
+    
     // 下发关键词
     private static final String[] EXPENSE_KEYWORDS = {"下发", "支付", "付款", "转账", "转", "出款"};
     
@@ -55,22 +58,34 @@ public class MessageParser {
                     .build();
         }
         
-        // 提取金额
-        Matcher amountMatcher = AMOUNT_PATTERN.matcher(text);
-        if (!amountMatcher.find()) {
+        // 严格检查格式：必须是 "金额 备注" 格式（金额在前，空格分隔）
+        Matcher strictMatcher = STRICT_BOOKING_PATTERN.matcher(text);
+        if (!strictMatcher.matches()) {
             return ParseResult.builder()
                     .success(false)
-                    .errorMessage("无法识别金额，请输入数字，例如：100")
+                    .errorMessage("格式错误，必须使用 '金额 备注' 格式，例如：100 咖啡")
                     .build();
         }
         
-        BigDecimal amount = new BigDecimal(amountMatcher.group(1));
+        // 提取金额
+        BigDecimal amount = new BigDecimal(strictMatcher.group(1));
+        
+        // 提取备注（第2组是空格后的内容，可能为null）
+        String description = strictMatcher.group(2);
+        if (description != null) {
+            description = description.trim();
+            // 清理常见词汇
+            String[] wordsToRemove = {"元", "块", "钱", "+"};
+            for (String word : wordsToRemove) {
+                description = description.replace(word, "").trim();
+            }
+        }
+        if (description == null || description.isEmpty()) {
+            description = "未备注";
+        }
         
         // 判断收支类型
         Transaction.TransactionType type = determineType(message);
-        
-        // 提取描述
-        String description = extractDescription(text, amountMatcher);
         
         // 自动分类
         String category = autoCategorize(description, type);

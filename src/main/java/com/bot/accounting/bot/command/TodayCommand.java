@@ -2,6 +2,7 @@ package com.bot.accounting.bot.command;
 
 import com.bot.accounting.dto.SummaryDTO;
 import com.bot.accounting.dto.TransactionDTO;
+import com.bot.accounting.service.DayCutoffService;
 import com.bot.accounting.service.SpreadsheetService;
 import com.bot.accounting.service.TransactionService;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +16,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
@@ -23,6 +26,7 @@ public class TodayCommand implements BotCommand {
     
     private final TransactionService transactionService;
     private final SpreadsheetService spreadsheetService;  // 添加 Excel 生成服务
+    private final DayCutoffService dayCutoffService;  // 添加日切服务
     
     @Override
     public String execute(Message message) {
@@ -31,100 +35,49 @@ public class TodayCommand implements BotCommand {
     }
         
     /**
-     * 简明模式执行（用于 +0 指令），返回 String
-     */
-    public String executeShort(Message message) {
-        Long chatId = message.getChatId();
-        SummaryDTO summary = transactionService.getTodaySummaryForChat(chatId);
-        String dateStr = summary.getAccountingDate().format(DateTimeFormatter.ofPattern("yyyy 年 MM 月 dd 日"));
-        return String.format(
-                "📊 <b>%s 会计日统计</b>\n\n" +
-                "💰 今日入款（%d笔）\n" +
-                "💸 今日下发（%d笔）\n\n" +
-                "───────────────\n" +
-                "总入款：%s\n" +
-                "汇率：%s\n" +
-                "交易费率：%s%%\n\n" +
-                "应下发：%s\n" +
-                "已下发：%s\n" +
-                "未下发：%s",
-                dateStr,
-                summary.getIncomeCount(),
-                summary.getExpenseCount(),
-                summary.getFormattedIncome(),
-                summary.getExchangeRate(),
-                summary.getFeeRate().multiply(new BigDecimal("100")),
-                summary.getFormattedShouldPay(),
-                summary.getFormattedPaid(),
-                summary.getFormattedUnpaid()
-        );
-    }
-
-    /**
      * 执行并返回带内联键盘的消息
      */
     public SendMessage executeWithKeyboard(Message message) {
-        return executeWithKeyboard(message, false);
-    }
-
-    /**
-     * 执行并返回带内联键盘的消息，可选简化模式（用于 +0 指令）
-     */
-    public SendMessage executeWithKeyboard(Message message, boolean isShortMode) {
         Long chatId = message.getChatId();
+        
+        // 检查是否已设置日切时间
+        if (!dayCutoffService.isDayCutoffTimeSet(chatId)) {
+            // 未设置日切时间，提示用户
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(chatId.toString());
+            sendMessage.setText("⚠️ <b>请先设置日切时间</b>\n\n" +
+                    "使用指令：<code>设置日切X</code>（X为0-23的数字）\n" +
+                    "例如：<code>设置日切14</code> 表示每天14:00开始新账期\n\n" +
+                    "设置后机器人将按日切时间切分新旧账单。");
+            sendMessage.setParseMode("HTML");
+            return sendMessage;
+        }
+        
         SummaryDTO summary = transactionService.getTodaySummaryForChat(chatId);
 
-        String dateStr = summary.getAccountingDate().format(DateTimeFormatter.ofPattern("yyyy 年 MM 月 dd 日"));
+        // 简短格式：2026年03月16日 14:00
+        String dateStr = summary.getAccountingDate().format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"));
+        String cutoffTimeStr = dayCutoffService.getDayCutoffTime(chatId).toString();
+        String dateTimeStr = dateStr + " " + cutoffTimeStr;
+        
+        // 按备注分组统计
+        String groupByDescription = formatGroupByDescription(summary.getIncomeTransactions());
 
-        String text;
-        if (isShortMode) {
-            text = String.format(
-                    "📊 <b>%s 会计日统计</b>\n\n" +
-                    "💰 今日入款（%d笔）\n" +
-                    "💸 今日下发（%d笔）\n\n" +
-                    "───────────────\n" +
-                    "总入款：%s\n" +
-                    "汇率：%s\n" +
-                    "交易费率：%s%%\n\n" +
-                    "应下发：%s\n" +
-                    "已下发：%s\n" +
-                    "未下发：%s",
-                    dateStr,
-                    summary.getIncomeCount(),
-                    summary.getExpenseCount(),
-                    summary.getFormattedIncome(),
-                    summary.getExchangeRate(),
-                    summary.getFeeRate().multiply(new BigDecimal("100")),
-                    summary.getFormattedShouldPay(),
-                    summary.getFormattedPaid(),
-                    summary.getFormattedUnpaid()
-            );
-        } else {
-            text = String.format(
-                    "📊 <b>今日统计 (%s)</b>\n\n" +
-                    "💰 今日入款（%d笔）\n"
-                    + "%s\n\n" +
-                    "💸 今日下发（%d笔）\n%s\n\n" +
-                    "───────────────\n" +
-                    "总入款：%s\n" +
-                    "汇率：%s\n" +
-                    "交易费率：%s%%\n\n" +
-                    "应下发：%s\n" +
-                    "已下发：%s\n" +
-                    "未下发：%s",
-                    dateStr,
-                    summary.getIncomeCount(),
-                    formatTransactionList(summary.getIncomeTransactions()),
-                    summary.getExpenseCount(),
-                    formatTransactionList(summary.getExpenseTransactions()),
-                    summary.getFormattedIncome(),
-                    summary.getExchangeRate(),
-                    summary.getFeeRate().multiply(new BigDecimal("100")),
-                    summary.getFormattedShouldPay(),
-                    summary.getFormattedPaid(),
-                    summary.getFormattedUnpaid()
-            );
-        }
+        // 优化消息格式
+        String text = String.format(
+                "📊 <b>今日统计</b>\n" +
+                "日切时间：%s\n\n" +
+                "💰 今日入款（%d笔）\n" +
+                "%s" +
+                "─────────────────\n" +
+                "%s" +
+                "总入款：%s",
+                dateTimeStr,
+                summary.getIncomeCount(),
+                formatTransactionList(summary.getIncomeTransactions()),
+                groupByDescription,
+                summary.getFormattedIncome()
+        );
 
         // 创建 SendMessage
         SendMessage sendMessage = new SendMessage();
@@ -162,17 +115,15 @@ public class TodayCommand implements BotCommand {
             String time = t.getCreatedAt().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
             String amount = t.getAmount().toString();
 
-            // 有标记员显示标记员，无标记员显示操作员
+            // 只显示操作员（不关心标记员，只关心操作员回复了什么）
             String label;
-            if (t.getTaggedUserName() != null && !t.getTaggedUserName().isEmpty()) {
-                label = t.getTaggedUserName();
-            } else if (t.getOperatorName() != null && !t.getOperatorName().isEmpty()) {
+            if (t.getOperatorName() != null && !t.getOperatorName().isEmpty()) {
                 label = t.getOperatorName();
             } else {
-                label = t.getDescription() != null ? t.getDescription() : "";
+                label = "未知操作员";
             }
 
-            // 如果有消息链接，添加点击跳转功能
+            // 如果有消息链接，添加点击跳转功能（方便对账回溯）
             if (t.getMessageLink() != null) {
                 sb.append(String.format("%s <a href=\"%s\">%s %s</a>\n",
                         time, t.getMessageLink(), amount, label));
@@ -187,6 +138,53 @@ public class TodayCommand implements BotCommand {
         }
         
         return sb.toString();
+    }
+    
+    /**
+     * 按备注分组统计
+     */
+    private String formatGroupByDescription(List<TransactionDTO> transactions) {
+        if (transactions == null || transactions.isEmpty()) {
+            return "";
+        }
+        
+        // 按备注分组汇总
+        Map<String, BigDecimal> groupMap = new HashMap<>();
+        for (TransactionDTO t : transactions) {
+            String desc = t.getDescription();
+            // 清理备注格式
+            desc = cleanDescription(desc);
+            BigDecimal current = groupMap.getOrDefault(desc, BigDecimal.ZERO);
+            groupMap.put(desc, current.add(t.getAmount()));
+        }
+        
+        // 构建分组统计字符串
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, BigDecimal> entry : groupMap.entrySet()) {
+            sb.append(String.format("%s\n收款总计：%s\n", entry.getKey(), entry.getValue()));
+        }
+        
+        return sb.toString();
+    }
+    
+    /**
+     * 清理备注显示格式
+     * 去掉花括号和冗余信息
+     */
+    private String cleanDescription(String desc) {
+        if (desc == null || desc.isEmpty()) {
+            return "未备注";
+        }
+        
+        // 去掉花括号
+        desc = desc.replace("{", "").replace("}", "");
+        
+        // 处理 "无备注（无标记员）" 格式
+        if (desc.contains("无备注") || desc.contains("未备注")) {
+            return "未备注";
+        }
+        
+        return desc.trim();
     }
     
     /**
@@ -206,8 +204,9 @@ public class TodayCommand implements BotCommand {
             InlineKeyboardButton viewOnlineButton = new InlineKeyboardButton();
             viewOnlineButton.setText("📊 查看在线表格");
             
-            LocalDate today = LocalDate.now();
-            String dateStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE);
+            // 使用日切服务获取当前会计日期
+            LocalDate accountingDate = dayCutoffService.getCurrentAccountingDate(chatId);
+            String dateStr = accountingDate.format(DateTimeFormatter.ISO_LOCAL_DATE);
             viewOnlineButton.setUrl(serverUrl + "/spreadsheet/" + chatId + "/" + dateStr);
             row1.add(viewOnlineButton);
             keyboardLayout.add(row1);

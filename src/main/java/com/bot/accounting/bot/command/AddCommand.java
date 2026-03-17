@@ -7,12 +7,14 @@ import com.bot.accounting.service.MessageParser;
 import com.bot.accounting.service.TransactionService;
 import com.bot.accounting.service.UserService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Message;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class AddCommand implements BotCommand {
@@ -57,10 +59,33 @@ public class AddCommand implements BotCommand {
     
     public String executeNatural(Message message) {
         User user = userService.getOrCreateUser(message);
-        MessageParser.ParseResult result = messageParser.parse(message.getText());
+        String text = message.getText();
+        log.info("executeNatural 开始解析: text='{}'", text);
+        
+        MessageParser.ParseResult result = messageParser.parse(text);
+        log.info("解析结果: success={}, amount={}, description='{}'", 
+                result.isSuccess(), result.getAmount(), result.getDescription());
         
         if (!result.isSuccess()) {
+            log.info("解析失败，返回 null");
             return null; // 不回复，让其他处理器处理
+        }
+        
+        // 纯数字输入（无备注）不返回确认消息，静默记录
+        if ("未备注".equals(result.getDescription())) {
+            transactionService.addTransaction(
+                    user,
+                    result.getAmount(),
+                    result.getType(),
+                    result.getCategory(),
+                    result.getDescription(),
+                    message.getChatId(),
+                    null,
+                    null,
+                    message.getMessageId(),
+                    getMessageTime(message)
+            );
+            return null; // 不回复
         }
         
         transactionService.addTransaction(
@@ -80,11 +105,13 @@ public class AddCommand implements BotCommand {
         String emoji = result.getType() == Transaction.TransactionType.INCOME ? "✅" : "✅";
         String typeStr = result.getType() == Transaction.TransactionType.INCOME ? "入款" : "下发";
         
-        return String.format("%s %s %s %s", 
+        String response = String.format("%s %s %s %s", 
                 emoji, 
                 typeStr, 
                 result.getAmount(), 
                 result.getDescription());
+        log.info("返回响应: '{}'", response);
+        return response;
     }
     
     /**

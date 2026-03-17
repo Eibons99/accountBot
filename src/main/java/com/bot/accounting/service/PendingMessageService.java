@@ -67,7 +67,7 @@ public class PendingMessageService {
      */
     public void cacheOperatorMessage(Long chatId, Integer messageId, Long operatorUserId,
                                       String messageText, String operatorUserName, 
-                                      Integer replyToMessageId) {
+                                      Integer replyToMessageId, String dayCutoffTime) {
         String key = PENDING_OPERATOR_KEY_PREFIX + chatId + ":" + messageId;
         
         PendingOperatorMessage pendingMessage = new PendingOperatorMessage();
@@ -79,9 +79,11 @@ public class PendingMessageService {
         pendingMessage.setReplyToMessageId(replyToMessageId);
         pendingMessage.setCreatedAt(LocalDateTime.now());
         pendingMessage.setRetryCount(0);
+        pendingMessage.setDayCutoffTime(dayCutoffTime);  // 记录当时的日切时间
 
         redisTemplate.opsForValue().set(key, pendingMessage, MESSAGE_EXPIRE_DAYS, TimeUnit.DAYS);
-        log.info("缓存操作员消息: chatId={}, messageId={}, user={}", chatId, messageId, operatorUserName);
+        log.info("缓存操作员消息: chatId={}, messageId={}, user={}, dayCutoffTime={}", 
+                chatId, messageId, operatorUserName, dayCutoffTime);
     }
 
     /**
@@ -206,5 +208,6 @@ public class PendingMessageService {
         private LocalDateTime createdAt;
         private Integer retryCount;
         private LocalDateTime lastRetryAt;
+        private String dayCutoffTime;  // 缓存消息时的日切时间（格式：HH:mm）
     }
 }

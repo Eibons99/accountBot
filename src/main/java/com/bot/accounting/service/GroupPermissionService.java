@@ -145,4 +145,55 @@ public class GroupPermissionService {
         creatorCache.remove(chatId + "_" + userId);
         creatorCache.remove(chatId + "_" + userId + "_admin");
     }
+    
+    /**
+     * 检查指定用户是否是群管理员（用于验证标记员/操作员设置的前提条件）
+     * Telegram 限制：机器人只能识别和操作群管理员
+     */
+    public boolean isUserGroupAdmin(Long chatId, Long userId) {
+        String cacheKey = chatId + "_" + userId + "_check";
+        
+        // 检查缓存
+        Boolean cached = creatorCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        
+        try {
+            TelegramLongPollingBot bot = botProvider.getIfAvailable();
+            if (bot == null) {
+                log.warn("Bot 尚未初始化，无法查询权限");
+                return false;
+            }
+            
+            GetChatMember getChatMember = new GetChatMember();
+            getChatMember.setChatId(chatId.toString());
+            getChatMember.setUserId(userId);
+            
+            ChatMember chatMember = bot.execute(getChatMember);
+            
+            // 检查是否是创建者或管理员
+            String status = chatMember.getStatus();
+            boolean isAdmin = "creator".equals(status) || "administrator".equals(status);
+            
+            // 缓存结果
+            creatorCache.put(cacheKey, isAdmin);
+            
+            // 5分钟后清除缓存
+            new Thread(() -> {
+                try {
+                    Thread.sleep(CACHE_EXPIRE_MS);
+                    creatorCache.remove(cacheKey);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+            
+            return isAdmin;
+        } catch (TelegramApiException e) {
+            log.error("查询用户权限失败: chatId={}, userId={}, error={}", chatId, userId, e.getMessage());
+            // 如果无法确认，默认返回 false（安全起见）
+            return false;
+        }
+    }
 }

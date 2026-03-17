@@ -1,5 +1,6 @@
 package com.bot.accounting.service;
 
+import com.bot.accounting.mapper.TransactionMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -23,6 +24,7 @@ public class MessageRecoveryService {
     private final TransactionService transactionService;
     private final UserService userService;
     private final DayCutoffService dayCutoffService;
+    private final TransactionMapper transactionMapper;
 
     // 匹配 +金额 格式
     private static final Pattern PLUS_PATTERN = Pattern.compile("^\\+(\\d+(?:\\.\\d{1,2})?)$");
@@ -124,6 +126,7 @@ public class MessageRecoveryService {
 
     /**
      * 处理单个待处理的操作员消息
+     * 注意：补偿数据时需要根据消息创建时的日切时间来计算会计日期
      */
     private void processPendingOperatorMessage(PendingMessageService.PendingOperatorMessage opMsg) {
         Long chatId = opMsg.getChatId();
@@ -175,6 +178,32 @@ public class MessageRecoveryService {
                 operatorUser = userService.getOrCreateUser(operatorUserId, opMsg.getOperatorUserName(), null, null);
             }
 
+            // 使用消息创建时间和缓存的日切时间计算会计日期
+            java.time.LocalDateTime messageTime = opMsg.getCreatedAt();
+            java.time.LocalDate accountingDate;
+            
+            // 如果缓存了当时的日切时间，使用缓存的；否则使用当前的
+            String cachedDayCutoff = opMsg.getDayCutoffTime();
+            if (cachedDayCutoff != null && !cachedDayCutoff.isEmpty()) {
+                // 使用缓存的日切时间计算
+                java.time.LocalTime cutoffTime = java.time.LocalTime.parse(cachedDayCutoff);
+                java.time.LocalDate date = messageTime.toLocalDate();
+                java.time.LocalDateTime cutoffDateTime = java.time.LocalDateTime.of(date, cutoffTime);
+                
+                if (messageTime.isBefore(cutoffDateTime)) {
+                    accountingDate = date.minusDays(1);
+                } else {
+                    accountingDate = date;
+                }
+                log.info("补偿数据会计日期计算(使用缓存日切): chatId={}, messageTime={}, cachedCutoff={}, accountingDate={}", 
+                        chatId, messageTime, cachedDayCutoff, accountingDate);
+            } else {
+                // 兼容旧数据：使用当前的日切时间计算
+                accountingDate = dayCutoffService.getAccountingDate(chatId, messageTime);
+                log.info("补偿数据会计日期计算(使用当前日切): chatId={}, messageTime={}, accountingDate={}", 
+                        chatId, messageTime, accountingDate);
+            }
+
             // 如果是回复标记消息
             if (replyToMessageId != null) {
                 PendingMessageService.PendingTagMessage tagMsg = 
@@ -197,31 +226,27 @@ public class MessageRecoveryService {
                             chatId
                     );
 
-                    // 记录交易
-                    transactionService.addTransaction(
+                    // 记录交易（使用消息创建时的会计日期）
+                    recordTransactionWithAccountingDate(
                             operatorUser,
                             amount,
-                            isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME
-                                    : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE,
-                            isIncome ? "标记入账" : "标记出账",
-                            String.format("标记员:%s 操作员:%s",
-                                    tagMsg.getTaggedUserName(), opMsg.getOperatorUserName()),
+                            isIncome,
+                            String.format("标记员:%s 操作员:%s", tagMsg.getTaggedUserName(), opMsg.getOperatorUserName()),
                             chatId,
                             taggedUser.getId(),
                             operatorUser.getId(),
-                            null,  // telegramMessageId
-                            opMsg.getCreatedAt()  // 使用消息的实际创建时间
+                            accountingDate
                     );
 
-                    log.info("成功恢复标记交易: chatId={}, amount={}, taggedUser={}, operator={}",
-                            chatId, amount, tagMsg.getTaggedUserName(), opMsg.getOperatorUserName());
+                    log.info("成功恢复标记交易: chatId={}, amount={}, taggedUser={}, operator={}, accountingDate={}",
+                            chatId, amount, tagMsg.getTaggedUserName(), opMsg.getOperatorUserName(), accountingDate);
                 } else {
                     // 标记消息已过期或不存在，直接记录操作员交易
-                    recordDirectOperatorTransaction(opMsg, amount, isIncome);
+                    recordDirectOperatorTransactionWithDate(opMsg, amount, isIncome, accountingDate);
                 }
             } else {
                 // 直接记录操作员交易
-                recordDirectOperatorTransaction(opMsg, amount, isIncome);
+                recordDirectOperatorTransactionWithDate(opMsg, amount, isIncome, accountingDate);
             }
 
             // 移除已处理的消息
@@ -238,32 +263,66 @@ public class MessageRecoveryService {
     }
 
     /**
-     * 直接记录操作员交易（无标记员）
+     * 直接记录操作员交易（无标记员，使用指定会计日期）
      */
-    private void recordDirectOperatorTransaction(PendingMessageService.PendingOperatorMessage opMsg, 
-                                                  BigDecimal amount, boolean isIncome) {
+    private void recordDirectOperatorTransactionWithDate(PendingMessageService.PendingOperatorMessage opMsg, 
+                                                          BigDecimal amount, boolean isIncome,
+                                                          java.time.LocalDate accountingDate) {
         com.bot.accounting.entity.User operatorUser = userService.findByTelegramId(opMsg.getOperatorUserId());
         if (operatorUser == null) {
             operatorUser = userService.getOrCreateUser(
                     opMsg.getOperatorUserId(), opMsg.getOperatorUserName(), null, null);
         }
 
-        transactionService.addTransaction(
-                operatorUser,
-                amount,
-                isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME
-                        : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE,
-                isIncome ? "直接入账" : "直接出账",
-                String.format("操作员:%s（无标记员）", opMsg.getOperatorUserName()),
-                opMsg.getChatId(),
-                null,
-                operatorUser.getId(),
-                null,  // telegramMessageId
-                opMsg.getCreatedAt()  // 使用消息的实际创建时间
-        );
+        // 创建交易记录
+        com.bot.accounting.entity.Transaction transaction = new com.bot.accounting.entity.Transaction();
+        transaction.setUserId(operatorUser.getId());
+        transaction.setAmount(amount.abs());
+        transaction.setType(isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME.name()
+                : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE.name());
+        transaction.setCategory(isIncome ? "直接入账" : "直接出账");
+        transaction.setDescription(String.format("操作员:%s（无标记员）", opMsg.getOperatorUserName()));
+        transaction.setTransactionDate(accountingDate);  // 使用指定的会计日期
+        transaction.setChatId(opMsg.getChatId());
+        transaction.setTaggedUserId(null);
+        transaction.setOperatorUserId(operatorUser.getId());
+        transaction.setTelegramMessageId(null);
+        transaction.setStatus(com.bot.accounting.entity.Transaction.TransactionStatus.PENDING.name());
+        
+        transactionMapper.insert(transaction);
 
-        log.info("成功恢复直接交易: chatId={}, amount={}, operator={}",
-                opMsg.getChatId(), amount, opMsg.getOperatorUserName());
+        log.info("成功恢复直接交易: chatId={}, amount={}, operator={}, accountingDate={}",
+                opMsg.getChatId(), amount, opMsg.getOperatorUserName(), accountingDate);
+    }
+    
+    /**
+     * 记录交易（使用指定会计日期）
+     */
+    private void recordTransactionWithAccountingDate(
+            com.bot.accounting.entity.User operatorUser,
+            BigDecimal amount,
+            boolean isIncome,
+            String description,
+            Long chatId,
+            Long taggedUserId,
+            Long operatorUserId,
+            java.time.LocalDate accountingDate) {
+        
+        com.bot.accounting.entity.Transaction transaction = new com.bot.accounting.entity.Transaction();
+        transaction.setUserId(operatorUser.getId());
+        transaction.setAmount(amount.abs());
+        transaction.setType(isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME.name()
+                : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE.name());
+        transaction.setCategory(isIncome ? "标记入账" : "标记出账");
+        transaction.setDescription(description);
+        transaction.setTransactionDate(accountingDate);  // 使用指定的会计日期
+        transaction.setChatId(chatId);
+        transaction.setTaggedUserId(taggedUserId);
+        transaction.setOperatorUserId(operatorUserId);
+        transaction.setTelegramMessageId(null);
+        transaction.setStatus(com.bot.accounting.entity.Transaction.TransactionStatus.PENDING.name());
+        
+        transactionMapper.insert(transaction);
     }
     
     /**

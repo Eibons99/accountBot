@@ -42,21 +42,38 @@ public class DayCutoffService {
      * 获取日切时间（默认 00:00）
      */
     public LocalTime getDayCutoffTime(Long chatId) {
+        log.info("获取日切时间: chatId={}", chatId);
+        
         SystemConfig config = systemConfigMapper.findByKeyAndChatId(DAY_CUTOFF_KEY, chatId);
+        log.info("查询特定chatId配置: config={}", config != null ? config.getConfigValue() : "null");
+        
         if (config == null) {
             config = systemConfigMapper.findGlobalByKey(DAY_CUTOFF_KEY);
+            log.info("查询全局配置: config={}", config != null ? config.getConfigValue() : "null");
         }
 
         String timeStr = config != null ? config.getConfigValue() : DEFAULT_CUTOFF_TIME;
+        log.info("最终使用的时间字符串: {}", timeStr);
+        
         try {
             String[] parts = timeStr.split(":");
             int hour = Integer.parseInt(parts[0]);
             int minute = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
-            return LocalTime.of(hour, minute);
+            LocalTime result = LocalTime.of(hour, minute);
+            log.info("解析后的日切时间: {}", result);
+            return result;
         } catch (Exception e) {
             log.warn("解析日切时间失败: {}, 使用默认值", timeStr);
             return LocalTime.of(0, 0);
         }
+    }
+    
+    /**
+     * 检查是否已设置日切时间（特定于该chatId）
+     */
+    public boolean isDayCutoffTimeSet(Long chatId) {
+        SystemConfig config = systemConfigMapper.findByKeyAndChatId(DAY_CUTOFF_KEY, chatId);
+        return config != null;
     }
 
     /**
@@ -64,26 +81,41 @@ public class DayCutoffService {
      */
     public void setDayCutoffTime(Long chatId, int hour, int minute) {
         String timeStr = String.format("%02d:%02d", hour, minute);
+        log.info("开始设置日切时间: chatId={}, timeStr={}", chatId, timeStr);
 
+        // 先尝试查询特定chatId的配置
         SystemConfig config = systemConfigMapper.findByKeyAndChatId(DAY_CUTOFF_KEY, chatId);
+        log.info("查询现有配置: config={}", config);
+        
         if (config == null) {
+            // 不存在则插入新记录
+            log.info("配置不存在，插入新记录");
             config = new SystemConfig();
             config.setConfigKey(DAY_CUTOFF_KEY);
             config.setChatId(chatId);
             config.setDescription("日切时间，账目从该时间点开始记录新的一天");
             config.setConfigValue(timeStr);
-            systemConfigMapper.insert(config);
+            int result = systemConfigMapper.insert(config);
+            log.info("插入结果: result={}, config.id={}", result, config.getId());
         } else {
+            // 存在则更新
+            log.info("配置已存在，更新记录: id={}, oldValue={}, newValue={}", 
+                    config.getId(), config.getConfigValue(), timeStr);
             config.setConfigValue(timeStr);
-            systemConfigMapper.updateById(config);
+            int result = systemConfigMapper.updateById(config);
+            log.info("更新结果: result={}", result);
         }
 
-        log.info("设置日切时间: chatId={}, time={}", chatId, timeStr);
+        // 立即验证配置是否保存成功
+        SystemConfig verifyConfig = systemConfigMapper.findByKeyAndChatId(DAY_CUTOFF_KEY, chatId);
+        log.info("验证配置: savedValue={}", verifyConfig != null ? verifyConfig.getConfigValue() : "null");
+        
+        log.info("设置日切时间完成: chatId={}, time={}", chatId, timeStr);
     }
 
     /**
      * 获取当前账期日期（根据日切时间判断）
-     * 如果当前时间 >= 日切时间，返回今天；否则返回昨天
+     * 如果当前时间 >= 日切时间，返回今天；否则返回昨天（昨天的账期还未结束）
      */
     public LocalDate getCurrentAccountingDate(Long chatId) {
         return getAccountingDate(chatId, now());
@@ -91,26 +123,31 @@ public class DayCutoffService {
 
     /**
      * 根据指定时间获取账期日期（根据日切时间判断）
-     * 如果指定时间 >= 日切时间，返回当天；否则返回前一天
+     * 如果指定时间 >= 日切时间，返回当天；否则返回前一天（前一天的账期还未结束）
      */
     public LocalDate getAccountingDate(Long chatId, LocalDateTime dateTime) {
+        log.info("计算会计日期: chatId={}, dateTime={}", chatId, dateTime);
+        
         LocalTime cutoffTime = getDayCutoffTime(chatId);
         LocalDate date = dateTime.toLocalDate();
         LocalDateTime cutoffDateTime = LocalDateTime.of(date, cutoffTime);
 
-        log.debug("日切时间检查：chatId={}, 指定时间={}, 日切时间={}, 计算的会计日期={}",
-                chatId, dateTime, cutoffDateTime,
-                dateTime.isBefore(cutoffDateTime) ? date.minusDays(1) : date);
+        log.info("日切时间检查：date={}, cutoffTime={}, cutoffDateTime={}", date, cutoffTime, cutoffDateTime);
+        log.info("比较结果：dateTime.isBefore(cutoffDateTime)={}", dateTime.isBefore(cutoffDateTime));
 
         if (dateTime.isBefore(cutoffDateTime)) {
-            // 指定时间还没到日切时间，算前一天
-            return date.minusDays(1);
+            // 指定时间还没到日切时间，前一天的账期还未结束
+            LocalDate result = date.minusDays(1);
+            log.info("返回前一天（前一天账期未结束）: {}", result);
+            return result;
         }
+        log.info("返回当天: {}", date);
         return date;
     }
 
     /**
      * 获取今日开始时间（根据日切时间）
+     * 返回当前账期的开始时间（日切时间）
      */
     public LocalDateTime getTodayStartTime(Long chatId) {
         LocalTime cutoffTime = getDayCutoffTime(chatId);
@@ -120,6 +157,7 @@ public class DayCutoffService {
 
     /**
      * 获取今日结束时间（根据日切时间）
+     * 返回当前账期的结束时间（次日日切时间减1纳秒）
      */
     public LocalDateTime getTodayEndTime(Long chatId) {
         return getTodayStartTime(chatId).plusDays(1).minusNanos(1);

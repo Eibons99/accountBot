@@ -8,6 +8,7 @@ import com.bot.accounting.bot.command.ExportCommand;
 import com.bot.accounting.bot.command.HelpCommand;
 import com.bot.accounting.bot.command.IncomeCommand;
 import com.bot.accounting.bot.command.ListCommand;
+import com.bot.accounting.bot.command.MeCommand;
 import com.bot.accounting.bot.command.MonthCommand;
 import com.bot.accounting.bot.command.StartCommand;
 import com.bot.accounting.bot.command.TagCommand;
@@ -47,6 +48,7 @@ public class CommandDispatcher {
     private final DeleteCommand deleteCommand;
     private final TagCommand tagCommand;
     private final ExportCommand exportCommand;  // 添加导出命令
+    private final MeCommand meCommand;  // 添加我的信息命令
     private final TagService tagService;
     private final DayCutoffService dayCutoffService;
     private final AdminService adminService;
@@ -60,8 +62,8 @@ public class CommandDispatcher {
     // 匹配 +金额 格式（操作员回复格式）
     private static final Pattern OPERATOR_REPLY_PATTERN = Pattern.compile("^\\+(\\d+(?:\\.\\d{1,2})?)$");
     
-    // 匹配 -金额 格式（操作员直接扣款）
-    private static final Pattern OPERATOR_EXPENSE_PATTERN = Pattern.compile("^-(\\d+(?:\\.\\d{1,2})?)$");
+    // 匹配 -金额 格式（操作员撤回/冲正）
+    private static final Pattern OPERATOR_REVOKE_PATTERN = Pattern.compile("^-(\\d+(?:\\.\\d{1,2})?)$");
     
     // 匹配 设置日切X 格式
     private static final Pattern DAY_CUTOFF_PATTERN = Pattern.compile("^设置日切(\\d+)$");
@@ -79,6 +81,7 @@ public class CommandDispatcher {
         commandMap.put("/delete", deleteCommand);
         commandMap.put("/tag", tagCommand);
         commandMap.put("/export", exportCommand);  // 注册导出命令
+        commandMap.put("/me", meCommand);  // 注册我的信息命令
     }
     
     public Object dispatch(Message message) {
@@ -99,6 +102,26 @@ public class CommandDispatcher {
         // 如果不是命令，先快速判断是否需要进一步处理
         if (!text.startsWith("/")) {
             log.debug("非命令消息，开始快速判断");
+            
+            // 首先检查是否是任何指令格式（在检查权限前快速识别）
+            boolean isCommandFormat = isPossibleChineseCommand(text) || 
+                                      isSpecialInstruction(text) ||
+                                      tagService.isTagMessage(text) ||
+                                      text.matches("^\\+\\d+(?:\\.\\d{1,2})?$") ||
+                                      text.matches("^-\\d+(?:\\.\\d{1,2})?$") ||
+                                      (text.matches(".*\\d+.*") && !text.matches("^\\d+(?:\\.\\d{1,2})?$"));
+            
+            // 如果是指令格式，检查是否是管理员（群主或配置的管理员）
+            // 只有管理员才能执行任何指令
+            if (isCommandFormat) {
+                Long userId = message.getFrom().getId();
+                boolean isAdmin = groupPermissionService.isGroupCreator(message) || 
+                                  adminService.isAdmin(userId);
+                if (!isAdmin) {
+                    log.debug("非管理员尝试执行指令，静默忽略：userId={}, text='{}'", userId, text);
+                    return null;  // 非管理员执行指令，静默忽略
+                }
+            }
             
             // 快速判断：是否是中文设置指令（优先处理，因为可能包含特殊关键词）
             if (isPossibleChineseCommand(text)) {
@@ -125,9 +148,9 @@ public class CommandDispatcher {
                 return handleTagMessage(message);
             }
             
-            // 快速判断：是否是 +金额 或 -金额 格式（操作员消息）
-            if (text.matches("^[+-]\\d+(?:\\.\\d{1,2})?$")) {
-                log.debug("匹配到操作员消息格式：text='{}'", text);
+            // 快速判断：是否是 +金额 格式（操作员入账消息）
+            if (text.matches("^\\+\\d+(?:\\.\\d{1,2})?$")) {
+                log.debug("匹配到操作员入账消息格式：text='{}'", text);
                 String operatorResult = handleOperatorMessage(message);
                 log.debug("操作员消息处理结果：{}", operatorResult == null ? "null" : operatorResult.substring(0, Math.min(50, operatorResult.length())));
                 if (operatorResult != null) {
@@ -135,10 +158,25 @@ public class CommandDispatcher {
                 }
             }
             
+            // 快速判断：是否是 -金额 格式（操作员撤回/冲正）
+            if (text.matches("^-\\d+(?:\\.\\d{1,2})?$")) {
+                log.debug("匹配到操作员撤回消息格式：text='{}'", text);
+                String revokeResult = handleRevokeMessage(message);
+                if (revokeResult != null) {
+                    return revokeResult;
+                }
+            }
+            
             // 快速判断：是否包含数字（可能是记账消息）
-            if (text.matches(".*\\d+.*")) {
-                // 普通自然语言解析
+            // 纯数字（如 1, 100）不视为记账指令，必须是 "金额 备注" 格式
+            boolean hasDigit = text.matches(".*\\d+.*");
+            boolean isPureNumber = text.matches("^\\d+(?:\\.\\d{1,2})?$");
+            log.debug("记账消息判断：text='{}', hasDigit={}, isPureNumber={}", text, hasDigit, isPureNumber);
+            
+            if (hasDigit && !isPureNumber) {
+                log.debug("进入自然语言解析");
                 String naturalResult = addCommand.executeNatural(message);
+                log.debug("自然语言解析结果: {}", naturalResult == null ? "null" : "有回复");
                 if (naturalResult != null) {
                     return naturalResult;
                 }
@@ -266,7 +304,8 @@ public class CommandDispatcher {
     
     /**
      * 检查用户是否有权限设置日切时间
-     * 群主、群组管理员、配置的管理员拥有所有权限
+     * 只有群主和配置的管理员才能设置日切时间
+     * 群管理员只是有资格被设置为标记员/操作员，本身不自动拥有管理权限
      */
     private boolean canSetDayCutoff(Message message) {
         Long userId = message.getFrom().getId();
@@ -275,22 +314,11 @@ public class CommandDispatcher {
         if (groupPermissionService.isGroupCreator(message)) {
             return true;
         }
-        // 群组管理员拥有所有权限
-        if (groupPermissionService.isGroupAdmin(message)) {
-            return true;
-        }
         // 配置的管理员拥有所有权限
         if (adminService.isAdmin(userId)) {
             return true;
         }
-        // 标记员
-        if (tagService.isTaggedUser(userId)) {
-            return true;
-        }
-        // 操作员
-        if (tagService.isOperator(userId)) {
-            return true;
-        }
+        // 群管理员、标记员和操作员不能设置日切时间
         return false;
     }
     
@@ -324,7 +352,8 @@ public class CommandDispatcher {
     }
     
     /**
-     * 检查用户是否是操作员（包括群主、群组管理员和配置的管理员）
+     * 检查用户是否是操作员（包括群主、配置的管理员和被授予操作员权限的用户）
+     * 群管理员只是有资格被设置为操作员，本身不自动拥有操作员权限
      */
     private boolean isOperatorOrAdmin(Message message) {
         Long userId = message.getFrom().getId();
@@ -333,15 +362,11 @@ public class CommandDispatcher {
         if (groupPermissionService.isGroupCreator(message)) {
             return true;
         }
-        // 群组管理员拥有所有权限
-        if (groupPermissionService.isGroupAdmin(message)) {
-            return true;
-        }
         // 配置的管理员拥有所有权限
         if (adminService.isAdmin(userId)) {
             return true;
         }
-        // 操作员
+        // 被授予操作员权限的用户
         return tagService.isOperator(userId);
     }
     
@@ -349,9 +374,10 @@ public class CommandDispatcher {
      * 处理中文指令：设置标记人
      */
     private String handleChineseSetTaggedUser(Message message, String text) {
-        // 严格权限控制：只有群主和群组管理员可以设置标记人员
-        if (!groupPermissionService.isGroupAdmin(message)) {
-            return "❌ 权限不足\n只有群主和群组管理员才能设置标记人员";
+        // 严格权限控制：只有群主和配置的管理员可以设置标记人员
+        // 群管理员只是有资格被设置为标记员，本身不能设置他人
+        if (!groupPermissionService.isGroupCreator(message) && !adminService.isAdmin(message.getFrom().getId())) {
+            return "❌ 权限不足\n只有群主才能设置标记人员";
         }
 
         // 检查是否是取消设置
@@ -371,6 +397,11 @@ public class CommandDispatcher {
             return "❌ 无法识别用户\n\n请确保：\n1. 正确使用 @ 提及用户\n2. 用户在群组中\n3. 用户已发送过消息";
         }
         
+        // 检查目标用户是否是群管理员（Telegram 限制：只有管理员才能被机器人识别和操作）
+        if (!groupPermissionService.isUserGroupAdmin(message.getChatId(), telegramId)) {
+            return "❌ 无法设置权限\n\n原因：该用户不是群管理员\n\nTelegram 限制：\n机器人只能识别和操作群管理员。\n请先将该用户设为群管理员，再设置其为操作员。";
+        }
+        
         try {
             userService.getOrCreateUser(telegramId, username, null, username);
             User user = tagService.setTaggedUser(telegramId, true);
@@ -387,9 +418,10 @@ public class CommandDispatcher {
      * 处理中文指令：设置操作人
      */
     private String handleChineseSetOperator(Message message, String text) {
-        // 严格权限控制：只有群主和群组管理员可以设置操作员
-        if (!groupPermissionService.isGroupAdmin(message)) {
-            return "❌ 权限不足\n只有群主和群组管理员才能设置操作员";
+        // 严格权限控制：只有群主和配置的管理员可以设置操作员
+        // 群管理员只是有资格被设置为操作员，本身不能设置他人
+        if (!groupPermissionService.isGroupCreator(message) && !adminService.isAdmin(message.getFrom().getId())) {
+            return "❌ 权限不足\n只有群主才能设置操作员";
         }
 
         // 检查是否是取消设置
@@ -409,6 +441,11 @@ public class CommandDispatcher {
             return "❌ 无法识别用户\n\n请确保：\n1. 正确使用 @ 提及用户\n2. 用户在群组中\n3. 用户已发送过消息";
         }
         
+        // 检查目标用户是否是群管理员（Telegram 限制：只有管理员才能被机器人识别和操作）
+        if (!groupPermissionService.isUserGroupAdmin(message.getChatId(), telegramId)) {
+            return "❌ 无法设置权限\n\n原因：该用户不是群管理员\n\nTelegram 限制：\n机器人只能识别和操作群管理员。\n请先将该用户设为群管理员，再设置其为操作员。";
+        }
+        
         try {
             userService.getOrCreateUser(telegramId, username, null, username);
             User user = tagService.setOperator(telegramId, true);
@@ -425,9 +462,9 @@ public class CommandDispatcher {
      * 处理移除标记员
      */
     private String handleRemoveTaggedUser(Message message, String text) {
-        // 严格权限控制：只有群主和群组管理员可以移除标记人员
-        if (!groupPermissionService.isGroupAdmin(message)) {
-            return "❌ 权限不足\n只有群主和群组管理员才能移除标记人员";
+        // 严格权限控制：只有群主和配置的管理员可以移除标记人员
+        if (!groupPermissionService.isGroupCreator(message) && !adminService.isAdmin(message.getFrom().getId())) {
+            return "❌ 权限不足\n只有群主才能移除标记人员";
         }
 
         // 提取 @用户名
@@ -456,9 +493,9 @@ public class CommandDispatcher {
      * 处理移除操作员
      */
     private String handleRemoveOperator(Message message, String text) {
-        // 严格权限控制：只有群主和群组管理员可以移除操作员
-        if (!groupPermissionService.isGroupAdmin(message)) {
-            return "❌ 权限不足\n只有群主和群组管理员才能移除操作员";
+        // 严格权限控制：只有群主和配置的管理员可以移除操作员
+        if (!groupPermissionService.isGroupCreator(message) && !adminService.isAdmin(message.getFrom().getId())) {
+            return "❌ 权限不足\n只有群主才能移除操作员";
         }
 
         // 提取 @用户名
@@ -553,27 +590,17 @@ public class CommandDispatcher {
         log.debug("权限检查结果：isOperator={}", isOperator);
         if (!isOperator) {
             log.warn("用户无操作员权限：userId={}", message.getFrom().getId());
-            return null;
+            return "❌ 权限不足\n只有操作员才能执行入账操作";
         }
         
-        // 解析操作员输入的金额
+        // 解析操作员输入的金额（只支持 +金额，-金额作为撤回操作暂不实现）
         java.math.BigDecimal amount = null;
-        boolean isIncome = true;
         
         Matcher plusMatcher = OPERATOR_REPLY_PATTERN.matcher(text);
         log.debug("尝试匹配 +金额格式：text='{}', matches={}", text, plusMatcher.matches());
         if (plusMatcher.matches()) {
             amount = new java.math.BigDecimal(plusMatcher.group(1));
-            isIncome = true;
-            log.debug("匹配成功：amount={}, type=INCOME", amount);
-        } else {
-            Matcher minusMatcher = OPERATOR_EXPENSE_PATTERN.matcher(text);
-            log.debug("尝试匹配 -金额格式：text='{}', matches={}", text, minusMatcher.matches());
-            if (minusMatcher.matches()) {
-                amount = new java.math.BigDecimal(minusMatcher.group(1));
-                isIncome = false;
-                log.debug("匹配成功：amount={}, type=EXPENSE", amount);
-            }
+            log.debug("匹配成功：amount={}", amount);
         }
         
         if (amount == null) {
@@ -581,10 +608,10 @@ public class CommandDispatcher {
             return null; // 不是操作员消息格式
         }
 
-        // 特殊指令：+0 或 -0 仅查看统计，不记录账单
+        // 特殊指令：+0 或 -0 仅查看统计，不记录账单（等同于 /today 指令）
         if (amount.compareTo(java.math.BigDecimal.ZERO) == 0) {
-            log.info("匹配到 0 金额指令，仅返回今日统计：userId={}", message.getFrom().getId());
-            return todayCommand.executeShort(message);
+            log.info("匹配到 0 金额指令，执行 today 指令：userId={}", message.getFrom().getId());
+            return todayCommand.execute(message);
         }
 
         // 检查是否是回复标记员消息
@@ -601,7 +628,7 @@ public class CommandDispatcher {
                 // 找到缓存的标记消息，使用缓存的信息
                 log.info("从Redis找到缓存的标记消息: chatId={}, messageId={}", 
                         message.getChatId(), repliedMessageId);
-                return processOperatorReplyWithCachedTag(message, cachedTagMessage, amount, isIncome);
+                return processOperatorReplyWithCachedTag(message, cachedTagMessage, amount);
             }
             
             // 检查被回复的消息是否是标记消息格式
@@ -610,13 +637,13 @@ public class CommandDispatcher {
                 TagService.TagParseResult result = tagService.parseTagMessage(repliedText);
                 if (result.isSuccess()) {
                     // 操作员回复 +金额，记录入账
-                    return processOperatorReply(message, repliedMessage, amount, isIncome);
+                    return processOperatorReply(message, repliedMessage, amount);
                 }
             }
         }
         
-        // 直接输入 +金额 或 -金额，无标记员
-        return processOperatorDirect(message, amount, isIncome);
+        // 直接输入 +金额，无标记员
+        return processOperatorDirect(message, amount);
     }
     
     /**
@@ -625,17 +652,19 @@ public class CommandDispatcher {
      */
     private String processOperatorReplyWithCachedTag(Message operatorMessage,
                                                       PendingMessageService.PendingTagMessage cachedTagMessage,
-                                                      java.math.BigDecimal amount, boolean isIncome) {
-        // 第1步：先缓存操作员消息到Redis
+                                                      java.math.BigDecimal amount) {
+        // 第1步：先缓存操作员消息到Redis（同时记录当时的日切时间）
         try {
             User operatorUser = userService.getOrCreateUser(operatorMessage);
+            String currentDayCutoff = dayCutoffService.getDayCutoffTime(operatorMessage.getChatId()).toString();
             pendingMessageService.cacheOperatorMessage(
                     operatorMessage.getChatId(),
                     operatorMessage.getMessageId(),
                     operatorUser.getTelegramId(),
                     operatorMessage.getText(),
                     userService.getUserDisplayName(operatorUser),
-                    cachedTagMessage.getMessageId()
+                    cachedTagMessage.getMessageId(),
+                    currentDayCutoff
             );
         } catch (Exception cacheError) {
             log.error("预缓存操作员消息失败", cacheError);
@@ -667,10 +696,9 @@ public class CommandDispatcher {
                     operatorMessage.getChatId()
             );
             
-            // 记录到交易表，负数表示下发，正数表示入款
-            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
-            addCommand.recordTransaction(operatorMessage, signedAmount,
-                    isIncome ? "入账" : "出账",
+            // 记录到交易表（只支持入账）
+            addCommand.recordTransaction(operatorMessage, amount,
+                    "入账",
                     remark,
                     taggedUser.getId(),
                     operatorUser.getId());
@@ -692,17 +720,19 @@ public class CommandDispatcher {
      * 先缓存到Redis，再处理数据库，确保消息不丢失
      */
     private String processOperatorReply(Message operatorMessage, Message taggedMessage,
-                                         java.math.BigDecimal amount, boolean isIncome) {
-        // 第1步：先缓存到Redis（确保消息不会丢失）
+                                         java.math.BigDecimal amount) {
+        // 第1步：先缓存到Redis（确保消息不会丢失，同时记录当时的日切时间）
         try {
             User operatorUser = userService.getOrCreateUser(operatorMessage);
+            String currentDayCutoff = dayCutoffService.getDayCutoffTime(operatorMessage.getChatId()).toString();
             pendingMessageService.cacheOperatorMessage(
                     operatorMessage.getChatId(),
                     operatorMessage.getMessageId(),
                     operatorUser.getTelegramId(),
                     operatorMessage.getText(),
                     userService.getUserDisplayName(operatorUser),
-                    taggedMessage.getMessageId()
+                    taggedMessage.getMessageId(),
+                    currentDayCutoff
             );
             log.debug("操作员消息已预缓存到Redis: chatId={}, messageId={}",
                     operatorMessage.getChatId(), operatorMessage.getMessageId());
@@ -728,10 +758,9 @@ public class CommandDispatcher {
                     operatorMessage.getChatId()
             );
             
-            // 同时记录到交易表，负数表示下发，正数表示入款
-            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
-            addCommand.recordTransaction(operatorMessage, signedAmount,
-                    isIncome ? "入账" : "出账",
+            // 同时记录到交易表（只支持入账）
+            addCommand.recordTransaction(operatorMessage, amount,
+                    "入账",
                     remark,
                     taggedUser.getId(),
                     operatorUser.getId());
@@ -753,19 +782,21 @@ public class CommandDispatcher {
     /**
      * 处理操作员直接输入（无标记员）
      */
-    private String processOperatorDirect(Message message, java.math.BigDecimal amount, boolean isIncome) {
-        log.debug("processOperatorDirect 开始处理：amount={}, isIncome={}", amount, isIncome);
+    private String processOperatorDirect(Message message, java.math.BigDecimal amount) {
+        log.debug("processOperatorDirect 开始处理：amount={}", amount);
         
-        // 第 1 步：先缓存到 Redis
+        // 第 1 步：先缓存到 Redis（同时记录当时的日切时间）
         try {
             User operatorUser = userService.getOrCreateUser(message);
+            String currentDayCutoff = dayCutoffService.getDayCutoffTime(message.getChatId()).toString();
             pendingMessageService.cacheOperatorMessage(
                     message.getChatId(),
                     message.getMessageId(),
                     operatorUser.getTelegramId(),
                     message.getText(),
                     userService.getUserDisplayName(operatorUser),
-                    null  // 没有关联的标记消息 ID
+                    null,  // 没有关联的标记消息 ID
+                    currentDayCutoff
             );
             log.debug("操作员直接输入消息已预缓存到 Redis: chatId={}, messageId={}",
                     message.getChatId(), message.getMessageId());
@@ -778,14 +809,14 @@ public class CommandDispatcher {
         try {
             User operatorUser = userService.getOrCreateUser(message);
             
-            // 记录到交易表，标记员为空
-            // 负数表示下发，正数表示入款
-            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
-            addCommand.recordTransaction(message, signedAmount,
-                    isIncome ? "直接入账" : "直接出账",
-                    "无备注（无标记员）");
-            log.info("操作员直接输入记录成功：chatId={}, amount={}, type={}", 
-                    message.getChatId(), amount, isIncome ? "INCOME" : "EXPENSE");
+            // 记录到交易表，标记员为空，操作员为当前用户（只支持入账）
+            addCommand.recordTransaction(message, amount,
+                    "直接入账",
+                    "无备注（无标记员）",
+                    null,  // 无标记员
+                    operatorUser.getId());  // 操作员是当前用户
+            log.info("操作员直接输入记录成功：chatId={}, amount={}", 
+                    message.getChatId(), amount);
 
             // 第 3 步：成功后移除缓存
             pendingMessageService.removePendingOperatorMessage(
@@ -825,6 +856,31 @@ public class CommandDispatcher {
     }
     
     /**
+     * 处理操作员撤回/冲正消息（-金额格式）
+     * 查找最近一笔相同金额的记录并删除
+     */
+    private String handleRevokeMessage(Message message) {
+        String text = message.getText();
+        log.info("处理撤回消息: text='{}'", text);
+        
+        // 解析金额
+        Matcher matcher = OPERATOR_REVOKE_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            return null;
+        }
+        
+        java.math.BigDecimal amount = new java.math.BigDecimal(matcher.group(1));
+        Long chatId = message.getChatId();
+        
+        // 查找最近一笔相同金额的交易
+        // 这里需要 TransactionService 支持按金额查找最近交易
+        // 暂时返回提示信息
+        return String.format("⚠️ 撤回请求：金额 %s\n\n" +
+                "请使用 /list 查看最近记录，\n" +
+                "然后使用 /delete [ID] 删除指定记录。", amount);
+    }
+    
+    /**
      * 从标记消息中提取备注
      * 标记消息格式：金额 备注
      * 例如："113 吴琼芝" -> "吴琼芝"
@@ -860,4 +916,5 @@ public class CommandDispatcher {
         }
         return text;
     }
+    
 }
