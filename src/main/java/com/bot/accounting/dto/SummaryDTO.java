@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 @Data
@@ -19,6 +20,7 @@ public class SummaryDTO {
     private BigDecimal shouldPay;
     private BigDecimal paid;
     private BigDecimal unpaid;
+    private LocalDate accountingDate;
     private List<TransactionDTO> incomeTransactions;
     private List<TransactionDTO> expenseTransactions;
     

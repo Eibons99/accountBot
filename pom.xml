@@ -132,12 +132,6 @@
             <version>5.7.1</version>
         </dependency>
 
-        <!-- MinIO SDK - S3 兼容存储 -->
-        <dependency>
-            <groupId>io.minio</groupId>
-            <artifactId>minio</artifactId>
-            <version>8.5.2</version>
-        </dependency>
     </dependencies>
 
     <!-- SpringBoot 瘦JAR打包 + 配置文件外置 - -->

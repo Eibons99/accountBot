@@ -47,6 +47,14 @@ public class MessageParser {
             }
         }
         
+        // 检查是否是特殊指令（如设置日切等），不解析为记账消息
+        if (isSpecialCommand(text)) {
+            return ParseResult.builder()
+                    .success(false)
+                    .errorMessage("非记账格式")
+                    .build();
+        }
+        
         // 提取金额
         Matcher amountMatcher = AMOUNT_PATTERN.matcher(text);
         if (!amountMatcher.find()) {
@@ -74,6 +82,35 @@ public class MessageParser {
                 .category(category)
                 .description(description)
                 .build();
+    }
+    
+    /**
+     * 检查是否是特殊指令（不应该被解析为记账消息）
+     */
+    private boolean isSpecialCommand(String text) {
+        String lowerText = text.toLowerCase();
+        
+        // 日切相关指令
+        if (lowerText.contains("日切") || lowerText.contains("cutoff")) {
+            return true;
+        }
+        
+        // 汇率相关指令
+        if (lowerText.contains("汇率") || lowerText.contains("rate")) {
+            return true;
+        }
+        
+        // 费率相关指令
+        if (lowerText.contains("费率") || lowerText.contains("fee")) {
+            return true;
+        }
+        
+        // 管理员设置类指令
+        if (lowerText.startsWith("设置") || lowerText.startsWith("取消")) {
+            return true;
+        }
+        
+        return false;
     }
     
     private Transaction.TransactionType determineType(String message) {

@@ -58,16 +58,7 @@ bot:
 
 logging:
   level:
-    com.bot.accounting: INFO
+    com.bot.accounting: DEBUG
     org.telegram: WARN
-    io.minio: DEBUG  # MinIO SDK 日志
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
-
-# MinIO 文件存储配置
-minio:
-  endpoint: http://localhost:9000        # MinIO 服务器地址
-  access-key: minioadmin                 # 访问密钥
-  secret-key: minioadmin                 # 秘密密钥
-  bucket: accounting-bot-exports         # 存储桶名称
-  secure: false                          # 是否使用 HTTPS

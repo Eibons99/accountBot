@@ -42,7 +42,7 @@ public class PendingMessageService {
         pendingMessage.setTaggedUserId(taggedUserId);
         pendingMessage.setTaggedUserName(taggedUserName);
         pendingMessage.setMessageText(messageText);
-        pendingMessage.setCreatedAt(LocalDateTime.now());
+        pendingMessage.setCreatedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")));
 
         redisTemplate.opsForValue().set(key, pendingMessage, MESSAGE_EXPIRE_DAYS, TimeUnit.DAYS);
         log.info("缓存标记消息: chatId={}, messageId={}, user={}", chatId, messageId, taggedUserName);

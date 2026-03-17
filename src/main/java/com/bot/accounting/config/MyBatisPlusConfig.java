@@ -28,8 +28,8 @@ public class MyBatisPlusConfig {
             @Override
             public void insertFill(MetaObject metaObject) {
                 log.debug("开始插入填充...");
-                this.strictInsertFill(metaObject, "createdAt", LocalDateTime.class, LocalDateTime.now());
-                this.strictInsertFill(metaObject, "updatedAt", LocalDateTime.class, LocalDateTime.now());
+                this.strictInsertFill(metaObject, "createdAt", LocalDateTime.class, LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")));
+                this.strictInsertFill(metaObject, "updatedAt", LocalDateTime.class, LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")));
                 this.strictInsertFill(metaObject, "deleted", Integer.class, 0);
             }
             

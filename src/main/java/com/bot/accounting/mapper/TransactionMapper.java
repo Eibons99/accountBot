@@ -36,24 +36,41 @@ public interface TransactionMapper extends BaseMapper<Transaction> {
             "AND transaction_date BETWEEN #{startDate} AND #{endDate} " +
             "ORDER BY created_at DESC")
     List<Transaction> findByChatIdAndTransactionDateBetweenOrderByCreatedAtDesc(
-            @Param("chatId") Long chatId, 
-            @Param("startDate") LocalDate startDate, 
+            @Param("chatId") Long chatId,
+            @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
-    
+
     @Select("SELECT COALESCE(SUM(amount), 0) FROM transactions " +
             "WHERE chat_id = #{chatId} AND type = #{type} " +
             "AND transaction_date BETWEEN #{startDate} AND #{endDate}")
-    BigDecimal sumAmountByChatAndTypeAndDateBetween(@Param("chatId") Long chatId, 
+    BigDecimal sumAmountByChatAndTypeAndDateBetween(@Param("chatId") Long chatId,
                                                      @Param("type") String type,
-                                                     @Param("startDate") LocalDate startDate, 
+                                                     @Param("startDate") LocalDate startDate,
                                                      @Param("endDate") LocalDate endDate);
-    
+
     @Select("SELECT * FROM transactions WHERE chat_id = #{chatId} AND type = #{type} " +
-            "AND transaction_date BETWEEN #{startDate} AND #{endDate} ORDER BY created_at DESC")
+            "AND transaction_date BETWEEN #{startDate} AND #{endDate} " +
+            "ORDER BY created_at DESC")
     List<Transaction> findByChatAndTypeAndDateBetween(@Param("chatId") Long chatId,
                                                        @Param("type") String type,
                                                        @Param("startDate") LocalDate startDate,
                                                        @Param("endDate") LocalDate endDate);
+
+    @Select("SELECT COALESCE(SUM(amount), 0) FROM transactions " +
+            "WHERE chat_id = #{chatId} AND type = #{type} " +
+            "AND created_at BETWEEN #{startTime} AND #{endTime}")
+    BigDecimal sumAmountByChatAndTypeAndTimeBetween(@Param("chatId") Long chatId,
+                                                     @Param("type") String type,
+                                                     @Param("startTime") java.time.LocalDateTime startTime,
+                                                     @Param("endTime") java.time.LocalDateTime endTime);
+
+    @Select("SELECT * FROM transactions WHERE chat_id = #{chatId} AND type = #{type} " +
+            "AND created_at BETWEEN #{startTime} AND #{endTime} " +
+            "ORDER BY created_at DESC")
+    List<Transaction> findByChatAndTypeAndTimeBetween(@Param("chatId") Long chatId,
+                                                       @Param("type") String type,
+                                                       @Param("startTime") java.time.LocalDateTime startTime,
+                                                       @Param("endTime") java.time.LocalDateTime endTime);
     
     @Select("SELECT COALESCE(SUM(t.amount), 0) FROM transactions t " +
             "JOIN users u ON t.user_id = u.id " +

@@ -56,19 +56,28 @@ public class AccountingBot extends TelegramLongPollingBot {
             if (update.hasMessage() && update.getMessage().hasText()) {
                 Message message = update.getMessage();
                 
-                // 记录收到的消息
-                chatLogService.logReceiveMessage(message);
-                
-                // 检查是否需要返回内联键盘
-                SendMessage keyboardMessage = commandDispatcher.dispatchWithKeyboard(message);
-                if (keyboardMessage != null) {
-                    execute(keyboardMessage);
-                    chatLogService.logSendMessage(message.getChatId(), keyboardMessage.getText(), message.getMessageId());
-                    return;
-                }
-                
+                // 记录收到的所有消息（用于调试）
+                log.debug("收到消息：chatId={}, text={}", message.getChatId(), message.getText());
+                            
+                // 先分发消息，根据返回结果决定是否记录日志
                 Object response = commandDispatcher.dispatch(message);
+                
+                // 调试日志
+                log.debug("dispatch 返回：{}", response == null ? "null" : response.getClass().getSimpleName());
+                            
+                // 只有当有响应时才记录日志和处理
                 if (response != null) {
+                    // 记录收到的消息（只在需要处理时记录）
+                    chatLogService.logReceiveMessage(message);
+                                
+                    // 检查是否需要返回内联键盘
+                    SendMessage keyboardMessage = commandDispatcher.dispatchWithKeyboard(message);
+                    if (keyboardMessage != null) {
+                        execute(keyboardMessage);
+                        chatLogService.logSendMessage(message.getChatId(), keyboardMessage.getText(), message.getMessageId());
+                        return;
+                    }
+                                
                     // 检查是否是 SendMessage 对象（带内联键盘）
                     if (response instanceof SendMessage) {
                         SendMessage sendMessage = (SendMessage) response;
@@ -81,11 +90,12 @@ public class AccountingBot extends TelegramLongPollingBot {
                     } else if (response instanceof String) {
                         sendMessage(message.getChatId(), (String) response, message.getMessageId());
                     }
+                                
+                    // 记录最后处理的消息 ID（只在成功处理时更新）
+                    chatSyncStateService.updateLastProcessedMessageId(
+                            message.getChatId(), message.getMessageId());
                 }
-                
-                // 记录最后处理的消息ID
-                chatSyncStateService.updateLastProcessedMessageId(
-                        message.getChatId(), message.getMessageId());
+                // 如果 response 为 null，说明是普通聊天消息，不记录日志和数据库
             }
         } catch (Exception e) {
             log.error("处理消息时发生错误: {}", e.getMessage(), e);

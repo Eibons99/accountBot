@@ -83,6 +83,8 @@ public class CommandDispatcher {
     
     public Object dispatch(Message message) {
         String text = message.getText();
+        log.debug("开始分发消息：text='{}'", text);
+        
         String command = extractCommand(text);
         
         BotCommand botCommand = commandMap.get(command);
@@ -94,31 +96,60 @@ public class CommandDispatcher {
             return botCommand.execute(message);
         }
         
-        // 如果不是命令，检查是否是操作员回复的 +金额 格式
+        // 如果不是命令，先快速判断是否需要进一步处理
         if (!text.startsWith("/")) {
-            // 检查是否是中文设置指令：设置标记人@成员 或 设置操作人@成员
-            String chineseCommandResult = handleChineseCommand(message);
-            if (chineseCommandResult != null) {
-                return chineseCommandResult;
+            log.debug("非命令消息，开始快速判断");
+            
+            // 快速判断：是否是中文设置指令（优先处理，因为可能包含特殊关键词）
+            if (isPossibleChineseCommand(text)) {
+                log.debug("匹配到中文设置指令前缀：text='{}'", text);
+                String chineseCommandResult = handleChineseCommand(message);
+                if (chineseCommandResult != null) {
+                    log.debug("中文设置指令处理成功：result='{}'", chineseCommandResult);
+                    return chineseCommandResult;
+                }
+                log.debug("中文设置指令格式但未匹配到具体命令");
+                // 如果是中文指令格式但没匹配到，直接返回 null，不再继续检查
+                return null;
             }
             
-            // 检查是否是操作员发送的 +金额 或 -金额 消息
-            String operatorResult = handleOperatorMessage(message);
-            if (operatorResult != null) {
-                return operatorResult;
+            // 快速判断：是否包含特殊指令关键词
+            if (isSpecialInstruction(text)) {
+                log.debug("匹配到特殊指令关键词，静默处理：text='{}'", text);
+                return null;  // 不回复，避免打扰群聊
             }
             
-            // 检查是否是标记人员发送的标记消息
+            // 快速判断：是否是标记消息格式（必须包含@）
             if (tagService.isTagMessage(text)) {
                 // 标记人员发送的消息，等待操作员回复
                 return handleTagMessage(message);
             }
             
-            // 普通自然语言解析
-            return addCommand.executeNatural(message);
+            // 快速判断：是否是 +金额 或 -金额 格式（操作员消息）
+            if (text.matches("^[+-]\\d+(?:\\.\\d{1,2})?$")) {
+                log.debug("匹配到操作员消息格式：text='{}'", text);
+                String operatorResult = handleOperatorMessage(message);
+                log.debug("操作员消息处理结果：{}", operatorResult == null ? "null" : operatorResult.substring(0, Math.min(50, operatorResult.length())));
+                if (operatorResult != null) {
+                    return operatorResult;
+                }
+            }
+            
+            // 快速判断：是否包含数字（可能是记账消息）
+            if (text.matches(".*\\d+.*")) {
+                // 普通自然语言解析
+                String naturalResult = addCommand.executeNatural(message);
+                if (naturalResult != null) {
+                    return naturalResult;
+                }
+            }
+            
+            // 其他情况都不回复，避免打扰群聊和查询数据库
+            return null;
         }
         
-        return "未知命令。使用 /help 查看可用命令。";
+        // 未知命令也不回复，避免打扰群聊
+        return null;
     }
     
     /**
@@ -165,46 +196,58 @@ public class CommandDispatcher {
      */
     private String handleChineseCommand(Message message) {
         String text = message.getText().trim();
-        
-        // 匹配 "设置日切X" 格式
+        log.debug("handleChineseCommand 处理文本：'{}'", text);
+            
+        // 匹配 "设置日切 X" 格式
         Matcher dayCutoffMatcher = DAY_CUTOFF_PATTERN.matcher(text);
         if (dayCutoffMatcher.matches()) {
+            log.debug("匹配到日切指令格式，hour={}", dayCutoffMatcher.group(1));
             return handleDayCutoffCommand(message, dayCutoffMatcher.group(1));
         }
-        
+            
         // 匹配 "设置标记员 @成员" 格式（必须有空格）
         if (text.startsWith("设置标记员 ") || text.startsWith("设置标记人 ")) {
             return handleChineseSetTaggedUser(message, text);
         }
-        
+            
         // 匹配 "设置操作员 @成员" 格式（必须有空格）
         if (text.startsWith("设置操作员 ") || text.startsWith("设置操作人 ")) {
             return handleChineseSetOperator(message, text);
         }
-
+    
         // 匹配 "取消标记员 @成员" 格式
         if (text.startsWith("取消标记员 ") || text.startsWith("取消标记人 ") ||
             text.startsWith("删除标记员 ") || text.startsWith("删除标记人 ") ||
             text.startsWith("移除标记员 ") || text.startsWith("移除标记人 ")) {
             return handleRemoveTaggedUser(message, text);
         }
-
+    
         // 匹配 "取消操作员 @成员" 格式
         if (text.startsWith("取消操作员 ") || text.startsWith("取消操作人 ") ||
             text.startsWith("删除操作员 ") || text.startsWith("删除操作人 ") ||
             text.startsWith("移除操作员 ") || text.startsWith("移除操作人 ")) {
             return handleRemoveOperator(message, text);
         }
-
+    
         return null;
     }
-    
+        
+    /**
+     * 快速判断：文本是否可能是中文指令（避免不必要的数据库查询）
+     */
+    private boolean isPossibleChineseCommand(String text) {
+        return text.startsWith("设置") || text.startsWith("取消") || 
+               text.startsWith("删除") || text.startsWith("移除");
+    }
+        
     /**
      * 处理日切时间设置指令
      */
     private String handleDayCutoffCommand(Message message, String hourStr) {
+        log.debug("handleDayCutoffCommand 开始执行，hour={}", hourStr);
         // 检查权限：群主、管理员、标记员、操作员都可以设置
         if (!canSetDayCutoff(message)) {
+            log.warn("权限不足，用户 ID={}", message.getFrom().getId());
             return "权限不足，只有群主、管理员、标记员或操作员才能设置日切时间";
         }
         
@@ -248,6 +291,35 @@ public class CommandDispatcher {
         if (tagService.isOperator(userId)) {
             return true;
         }
+        return false;
+    }
+    
+    /**
+     * 检查是否包含特殊指令关键词
+     */
+    private boolean isSpecialInstruction(String text) {
+        String lowerText = text.toLowerCase();
+        
+        // 日切相关指令
+        if (lowerText.contains("日切") || lowerText.contains("cutoff")) {
+            return true;
+        }
+        
+        // 汇率相关指令
+        if (lowerText.contains("汇率") || lowerText.contains("rate")) {
+            return true;
+        }
+        
+        // 费率相关指令
+        if (lowerText.contains("费率") || lowerText.contains("fee")) {
+            return true;
+        }
+        
+        // 管理员设置类指令
+        if (lowerText.startsWith("设置") || lowerText.startsWith("取消")) {
+            return true;
+        }
+        
         return false;
     }
     
@@ -469,14 +541,18 @@ public class CommandDispatcher {
     
     /**
      * 处理操作员发送的消息（+金额 或 -金额）
-     * 返回非null表示已处理，返回null表示不是操作员消息
+     * 返回非 null 表示已处理，返回 null 表示不是操作员消息
      * 群主和管理员也拥有操作员权限
      */
     private String handleOperatorMessage(Message message) {
         String text = message.getText().trim();
+        log.debug("handleOperatorMessage 开始处理：text='{}', userId={}", text, message.getFrom().getId());
         
         // 检查发送者是否是操作员、群主或管理员（群主和管理员拥有所有权限）
-        if (!isOperatorOrAdmin(message)) {
+        boolean isOperator = isOperatorOrAdmin(message);
+        log.debug("权限检查结果：isOperator={}", isOperator);
+        if (!isOperator) {
+            log.warn("用户无操作员权限：userId={}", message.getFrom().getId());
             return null;
         }
         
@@ -485,21 +561,32 @@ public class CommandDispatcher {
         boolean isIncome = true;
         
         Matcher plusMatcher = OPERATOR_REPLY_PATTERN.matcher(text);
+        log.debug("尝试匹配 +金额格式：text='{}', matches={}", text, plusMatcher.matches());
         if (plusMatcher.matches()) {
             amount = new java.math.BigDecimal(plusMatcher.group(1));
             isIncome = true;
+            log.debug("匹配成功：amount={}, type=INCOME", amount);
         } else {
             Matcher minusMatcher = OPERATOR_EXPENSE_PATTERN.matcher(text);
+            log.debug("尝试匹配 -金额格式：text='{}', matches={}", text, minusMatcher.matches());
             if (minusMatcher.matches()) {
                 amount = new java.math.BigDecimal(minusMatcher.group(1));
                 isIncome = false;
+                log.debug("匹配成功：amount={}, type=EXPENSE", amount);
             }
         }
         
         if (amount == null) {
+            log.debug("金额解析失败，返回 null");
             return null; // 不是操作员消息格式
         }
-        
+
+        // 特殊指令：+0 或 -0 仅查看统计，不记录账单
+        if (amount.compareTo(java.math.BigDecimal.ZERO) == 0) {
+            log.info("匹配到 0 金额指令，仅返回今日统计：userId={}", message.getFrom().getId());
+            return todayCommand.executeShort(message);
+        }
+
         // 检查是否是回复标记员消息
         if (message.isReply() && message.getReplyToMessage() != null) {
             Message repliedMessage = message.getReplyToMessage();
@@ -580,8 +667,9 @@ public class CommandDispatcher {
                     operatorMessage.getChatId()
             );
             
-            // 记录到交易表
-            addCommand.recordTransaction(operatorMessage, amount,
+            // 记录到交易表，负数表示下发，正数表示入款
+            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
+            addCommand.recordTransaction(operatorMessage, signedAmount,
                     isIncome ? "入账" : "出账",
                     remark,
                     taggedUser.getId(),
@@ -640,8 +728,9 @@ public class CommandDispatcher {
                     operatorMessage.getChatId()
             );
             
-            // 同时记录到交易表
-            addCommand.recordTransaction(operatorMessage, amount,
+            // 同时记录到交易表，负数表示下发，正数表示入款
+            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
+            addCommand.recordTransaction(operatorMessage, signedAmount,
                     isIncome ? "入账" : "出账",
                     remark,
                     taggedUser.getId(),
@@ -662,11 +751,12 @@ public class CommandDispatcher {
     }
     
     /**
-     * 处理操作员直接输入金额（无标记员）
-     * 先缓存到Redis，再处理数据库，确保消息不丢失
+     * 处理操作员直接输入（无标记员）
      */
     private String processOperatorDirect(Message message, java.math.BigDecimal amount, boolean isIncome) {
-        // 第1步：先缓存到Redis（确保消息不会丢失）
+        log.debug("processOperatorDirect 开始处理：amount={}, isIncome={}", amount, isIncome);
+        
+        // 第 1 步：先缓存到 Redis
         try {
             User operatorUser = userService.getOrCreateUser(message);
             pendingMessageService.cacheOperatorMessage(
@@ -675,32 +765,37 @@ public class CommandDispatcher {
                     operatorUser.getTelegramId(),
                     message.getText(),
                     userService.getUserDisplayName(operatorUser),
-                    null
+                    null  // 没有关联的标记消息 ID
             );
-            log.debug("操作员消息已预缓存到Redis: chatId={}, messageId={}",
+            log.debug("操作员直接输入消息已预缓存到 Redis: chatId={}, messageId={}",
                     message.getChatId(), message.getMessageId());
         } catch (Exception cacheError) {
-            log.error("预缓存操作员消息失败", cacheError);
+            log.error("预缓存操作员直接输入消息失败", cacheError);
             return "系统错误，请稍后重试";
         }
         
-        // 第2步：处理数据库
+        // 第 2 步：处理数据库
         try {
             User operatorUser = userService.getOrCreateUser(message);
             
             // 记录到交易表，标记员为空
-            addCommand.recordTransaction(message, amount,
+            // 负数表示下发，正数表示入款
+            java.math.BigDecimal signedAmount = isIncome ? amount : amount.negate();
+            addCommand.recordTransaction(message, signedAmount,
                     isIncome ? "直接入账" : "直接出账",
                     "无备注（无标记员）");
+            log.info("操作员直接输入记录成功：chatId={}, amount={}, type={}", 
+                    message.getChatId(), amount, isIncome ? "INCOME" : "EXPENSE");
 
-            // 第3步：成功后移除缓存
+            // 第 3 步：成功后移除缓存
             pendingMessageService.removePendingOperatorMessage(
                     message.getChatId(), message.getMessageId());
 
             // 返回今日统计
+            log.debug("调用 todayCommand.execute() 返回统计信息");
             return todayCommand.execute(message);
         } catch (Exception e) {
-            log.error("处理操作员直接输入失败，消息已缓存到Redis等待恢复", e);
+            log.error("处理操作员直接输入失败，消息已缓存到 Redis 等待恢复", e);
             return "记录失败，消息已缓存，系统恢复后将自动处理";
         }
     }

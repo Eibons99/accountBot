@@ -201,14 +201,16 @@ public class MessageRecoveryService {
                     transactionService.addTransaction(
                             operatorUser,
                             amount,
-                            isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME 
+                            isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME
                                     : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE,
                             isIncome ? "标记入账" : "标记出账",
-                            String.format("标记员:%s 操作员:%s", 
+                            String.format("标记员:%s 操作员:%s",
                                     tagMsg.getTaggedUserName(), opMsg.getOperatorUserName()),
                             chatId,
                             taggedUser.getId(),
-                            operatorUser.getId()
+                            operatorUser.getId(),
+                            null,  // telegramMessageId
+                            opMsg.getCreatedAt()  // 使用消息的实际创建时间
                     );
 
                     log.info("成功恢复标记交易: chatId={}, amount={}, taggedUser={}, operator={}",
@@ -249,13 +251,15 @@ public class MessageRecoveryService {
         transactionService.addTransaction(
                 operatorUser,
                 amount,
-                isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME 
+                isIncome ? com.bot.accounting.entity.Transaction.TransactionType.INCOME
                         : com.bot.accounting.entity.Transaction.TransactionType.EXPENSE,
                 isIncome ? "直接入账" : "直接出账",
                 String.format("操作员:%s（无标记员）", opMsg.getOperatorUserName()),
                 opMsg.getChatId(),
                 null,
-                operatorUser.getId()
+                operatorUser.getId(),
+                null,  // telegramMessageId
+                opMsg.getCreatedAt()  // 使用消息的实际创建时间
         );
 
         log.info("成功恢复直接交易: chatId={}, amount={}, operator={}",

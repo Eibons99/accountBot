@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Message;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Component
 @RequiredArgsConstructor
@@ -42,7 +43,8 @@ public class AddCommand implements BotCommand {
                 message.getChatId(),
                 null,
                 null,
-                message.getMessageId()  // 传递 Telegram 消息 ID
+                message.getMessageId(),  // 传递 Telegram 消息 ID
+                getMessageTime(message)  // 传递消息时间
         );
         
         return String.format(
@@ -70,7 +72,8 @@ public class AddCommand implements BotCommand {
                 message.getChatId(),
                 null,
                 null,
-                message.getMessageId()  // 传递 Telegram 消息 ID
+                message.getMessageId(),  // 传递 Telegram 消息 ID
+                getMessageTime(message)  // 传递消息时间
         );
         
         // 群聊场景：只返回简洁确认，不干扰群聊
@@ -112,7 +115,18 @@ public class AddCommand implements BotCommand {
                 message.getChatId(),
                 taggedUserId,
                 operatorUserId,
-                message.getMessageId()  // 传递 Telegram 消息 ID
+                message.getMessageId(),  // 传递 Telegram 消息 ID
+                getMessageTime(message)  // 传递消息时间
         );
+    }
+
+    /**
+     * 从 Telegram Message 获取消息时间
+     */
+    private LocalDateTime getMessageTime(Message message) {
+        if (message.getDate() != null) {
+            return dayCutoffService.toLocalDateTime(message.getDate());
+        }
+        return null;
     }
 }
